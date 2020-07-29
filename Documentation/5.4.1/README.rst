@@ -914,7 +914,7 @@ Phase 5: Deploy the Overcloud
 
 ::
 
-    yum swap openstack-tripleo-heat-templates openstack-tripleo-heat-templates-8.4.1-58.el7ost.noarch
+    sudo yum swap openstack-tripleo-heat-templates openstack-tripleo-heat-templates-8.4.1-58.el7ost.noarch
 
 2. Use the ``openstack overcloud deploy`` command options to pass the environment files and to create or update an Overcloud deployment where:
 
