@@ -138,22 +138,6 @@ To prepare for the Nuage VSP integration, install Director on the Undercloud sys
 
 https://access.redhat.com/documentation/en-us/red_hat_openstack_platform/13/html/director_installation_and_usage/installing-the-undercloud
 
-Then make sure the required images for the RHEL 7.8 deployment are available:
-
-1. After the Undercloud is installed, make sure that you have openstack-tripleo-heat-templates-8.4.1-58.el7ost package.
-
-::
-
-    yum swap openstack-tripleo-heat-templates openstack-tripleo-heat-templates-8.4.1-58.el7ost.noarch
-
-
-2. Download following images for the RHEL 7.8 Overcloud qcow2 file:
-
-::
-
-    yum install rhosp-director-images-13.0-20200610.2.el7ost rhosp-director-images-ipa-13.0-20200610.2.el7ost
-
-
 Phase 2: Download Nuage Source Code
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -170,7 +154,6 @@ In this phase, get the Nuage Tripleo Heat Templates, image patching files, and t
     cd /home/stack
     git clone https://github.com/nuagenetworks/nuage-ospdirector.git -b 13.541U12.1
     ln -s nuage-ospdirector/nuage-tripleo-heat-templates .
-
 
 
 Phase 3: Prepare the Containers
@@ -389,7 +372,7 @@ The repository contents may change depending on the roles configured for your de
    |----------------+----------------------------------------------+-------------------------------------------------------------------------------------------+
 
 
-Phase 4.3: Modify the Overcloud Image
+Phase 4.3: Modify the Overcloud Image (optional)
 ++++++++++++++++++++++++++++++++++++++++
 
 In this phase, you modify the overcloud-full.qcow2 image with the required Nuage packages.
@@ -402,21 +385,28 @@ Follow these steps to modify the the Overcloud qcow image (overcloud-full.qcow2)
 
     yum install libguestfs-tools python-yaml -y
 
+2. Download and install the RHEL 7.8 Overcloud qcow2 images package:
 
-2. Copy the *image-patching* folder from /home/stack/nuage-ospdirector/image-patching/ on the hypervisor machine that is accessible to the nuage-rpms repository.
+::
+
+    yum install rhosp-director-images-13.0-20200610.2.el7ost rhosp-director-images-ipa-13.0-20200610.2.el7ost
+    cd /home/stack/images
+    tar xvfz- <...> 
+
+3. Copy the *image-patching* folder from /home/stack/nuage-ospdirector/image-patching/ on the hypervisor machine that is accessible to the nuage-rpms repository.
 
 ::
 
     cd nuage_image_patching_scripts
 
 
-3. Copy *overcloud-full.qcow2* from /home/stack/images/ on the Undercloud director to this location and make a backup of *overcloud-full.qcow2*.
+4. Copy *overcloud-full.qcow2* from /home/stack/images/ on the Undercloud director to this location and make a backup of *overcloud-full.qcow2*.
 
 ::
 
     cp overcloud-full.qcow2 overcloud-full-bk.qcow2
 
-4. This script takes in *nuage_patching_config.yaml* as input parameters. You need to configure the following parameters:
+5. This script takes in *nuage_patching_config.yaml* as input parameters. You need to configure the following parameters:
 
    * ImageName (required) is the name of the qcow2 image (for example, overcloud-full.qcow2).
    * NuageMajorVersion (required) is the Nuage Major Version. Valid options are either *5.0* or *6.0*. Enter *5.0*.
@@ -467,7 +457,7 @@ Follow these steps to modify the the Overcloud qcow image (overcloud-full.qcow2)
 
    For examples of nuage_patching_config.yaml, go to `Nuage Patching Configuration`_.
 
-5. Run the following command that provides the parameter values to start the image patching process:
+6. Run the following command that provides the parameter values to start the image patching process:
 
 ::
 
@@ -482,13 +472,13 @@ Follow these steps to modify the the Overcloud qcow image (overcloud-full.qcow2)
         cp overcloud-full-bk.qcow2 overcloud-full.qcow2
 
 
-6. Verify that the *machine-id* is clear in the Overcloud image. The result should be empty output.
+7. Verify that the *machine-id* is clear in the Overcloud image. The result should be empty output.
 
 ::
 
     guestfish -a overcloud-full.qcow2 run : mount /dev/sda / : cat /etc/machine-id
 
-7. Copy the patched image back to /home/stack/images/ on the Undercloud and upload it to Glance.
+8. Copy the patched image back to /home/stack/images/ on the Undercloud and upload it to Glance.
 
    a. Check that the current images are uploaded:
 
@@ -920,7 +910,12 @@ Network Isolation
 Phase 5: Deploy the Overcloud
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use the ``openstack overcloud deploy`` command options to pass the environment files and to create or update an Overcloud deployment where:
+1. Make sure that you have the openstack-tripleo-heat-templates-8.4.1-58.el7ost package:
+
+::
+    yum swap openstack-tripleo-heat-templates openstack-tripleo-heat-templates-8.4.1-58.el7ost.noarch
+
+2. Use the ``openstack overcloud deploy`` command options to pass the environment files and to create or update an Overcloud deployment where:
 
     * neutron-nuage-config.yaml has the Nuage-specific Controller parameter values.
     * node-info.yaml has information specifying the count and flavor for the Controller and Compute nodes.
