@@ -1,0 +1,369 @@
+For Aggregation, adding TestPMD wiki here
+Edits up to today have been added
+
+The following will build and install a new TestPMD instance.
+ 
+#1. Install RHEL/Centos 7.6 image.
+#2. Run yum update.
+#3. Turn off selinux
+ 
+We are going to reboot later hence there is no need to disable selinux dynamically.
+
+vi /etc/selinux/config
+ 
+Change SELINUX=enforcing to
+
+     SELINUX=disabled
+ 
+#4. Add Hugepages.
+ 
+We are going to use the default Hugepage size of 2MB. Thus we only need to add the number of hugepages.
+ 
+```
+vi /etc/default/grub
+```
+ 
+Add "intel_iommu=on iommu=pt hugepages=4000” to GRUB_CMDLINE_LINUX. Change the number of hugepages to suit the deployment.
+ 
+```
+GRUB_CMDLINE_LINUX="console=tty0 crashkernel=auto console=ttyS0,115200 intel_iommu=on iommu=pt hugepages=2000"
+```
+ 
+#5. Mount hugepages.
+ 
+Again as we are going to reboot we do not need to do this dynamically, however if this is required follow both steps below to ensure persistency.
+ 
+For dynamic addition of hugepage mount.
+ 
+```
+mkdir /mnt/huge
+umount -a -t hugetlbfs
+mount -t hugetlbfs nodev /mnt/huge
+```
+vi /
+To add the mount persistently we need to add the mount to fstab.
+ 
+```
+vi /etc/fstab
+```
+ 
+Add the following to the list of mounts.
+ 
+```
+nodev /mnt/huge hugetlbfs defaults 0 0
+```
+ 
+#6. Update the grub cmd line.
+ 
+```
+grub2-mkconfig -o /boot/grub2/grub.cfg
+```
+ 
+Output should be similar to this.
+ 
+```
+[root@dut-11 ~]# grub2-mkconfig -o /boot/grub2/grub.cfg
+Generating grub configuration file ...
+Found linux image: /boot/vmlinuz-3.10.0-693.11.1.el7.x86_64
+Found initrd image: /boot/initramfs-3.10.0-693.11.1.el7.x86_64.img
+Found linux image: /boot/vmlinuz-3.10.0-327.28.3.el7.x86_64
+Found initrd image: /boot/initramfs-3.10.0-327.28.3.el7.x86_64.img
+Found linux image: /boot/vmlinuz-0-rescue-56d65f493d8f854534fe792ecf014b83
+Found initrd image: /boot/initramfs-0-rescue-56d65f493d8f854534fe792ecf014b83.img
+done
+```
+ 
+#7. Install addition packages we need to build dpdk.
+ 
+```
+yum -y install gcc
+yum -y install kernel-devel
+yum -y install numactl-devel
+```
+ 
+
+#8. Reboot
+ 
+After reboot check the kernel version.
+ 
+```
+[root@dut-11 app]# uname -a
+Linux dut-11 3.10.0-693.11.1.el7.x86_64 #1 SMP Mon Dec 4 23:52:40 UTC 2017 x86_64 x86_64 x86_64 GNU/Linux
+```
+ 
+
+#9. Download and extract stable dpdk version.
+ 
+```
+https://fast.dpdk.org/rel/dpdk-18.11.6.tar.xz
+tar xJf dpdk-18.11.6.tar.xz
+cd dpdk-stable-18.11.6/
+```
+ 
+#10. Build dpdk
+ 
+To ensure that the build runs ok before install the steps below are split. These can be run as "make config" and "make install".
+ 
+```
+make config T=x86_64-native-linuxapp-gcc
+make
+make install
+```
+ 
+#11. Build drivers
+ 
+```
+cd build
+make
+make install
+```
+ 
+#12. Insert nic drivers
+ 
+```
+modprobe uio
+insmod /root/dpdk-stable-18.11.6/build/kmod/igb_uio.ko
+```
+ 
+#13. Bind drivers and check status.
+ 
+To bind the drivers the interfaces we are using need to inactive. We also will use the pcie address and not the interface device name to complete the binding.
+ 
+Collect the pcie address via ethtool, in this case we will be using eth1 and eth2.
+ 
+```
+[root@dut-11 usertools]# ethtool -i eth1
+driver: virtio_net
+version: 1.0.0
+firmware-version:
+expansion-rom-version:
+bus-info: 0000:00:04.0
+supports-statistics: no
+supports-test: no
+supports-eeprom-access: no
+supports-register-dump: no
+supports-priv-flags: no
+[root@dut-11 usertools]# ethtool -i eth2
+driver: virtio_net
+version: 1.0.0
+firmware-version:
+expansion-rom-version:
+bus-info: 0000:00:05.0
+supports-statistics: no
+supports-test: no
+supports-eeprom-access: no
+supports-register-dump: no
+supports-priv-flags: no
+```
+ 
+The pcie addresses match up as
+eth1 = 00:04.0
+eth2 = 00:05.0
+ 
+DPDK provides a script to bind the drivers to these interfaces. The interface scripts are available in "/root/dpdk-stable-17.08.1/usertools".
+ 
+```
+shut down interfaces
+....
+
+cd ../usertools/
+./dpdk-devbind.py -b igb_uio 00:03.0
+./dpdk-devbind.py -b igb_uio 00:04.0
+```
+ 
+Check the status of the interfaces, specifically in this case we should see eth1 and eth2 available for dpdk.
+ 
+``
+[root@dut-11 usertools]# ./dpdk-devbind.py --status | less
+ 
+Network devices using DPDK-compatible driver
+============================================
+0000:00:04.0 'Virtio network device 1000' drv=uio_pci_generic unused=
+0000:00:05.0 'Virtio network device 1000' drv=uio_pci_generic unused=
+ 
+Network devices using kernel driver
+===================================
+0000:00:03.0 'Virtio network device 1000' if=eth0 drv=virtio-pci unused=uio_pci_generic *Active*
+```
+ 
+#14 Running testpmd
+ 
+At this point we are ready to run testpmd. We will be loading specific configuration at runtime. This will include
+ 
+- number of cores provided to dpdk/TestPMD
+- number of tx/rx queues to be used. This needs to match the number of queues that were allocated to the VM when it was spawned (multi-queue must be enabled on the VM)
+- depth of the tx/rx queues. This can be tuned between the balance of latency and thruput.
+- the forwarding mode to be used between the ports. In our case we are using mac fowarding.
+- the peer MAC address for each port. Depending on the topology of the DUT this should match the traffic generator ports, or the next hop MAC address for t -
+ 
+In our case we are sending/receiving traffic from t-rex over a L2 domain. Hence the peer MAC address will be that of the t-rex server itself. Note here that correspondingly the t-rex server needs to MAC addresses fo the TestPMD instance also.
+ 
+```
+[root@cas-cs6-004 v2.34]# ip link show ens3f0
+16: ens3f0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9238 qdisc mq state UP mode DEFAULT qlen 1000
+    link/ether 24:8a:07:b8:f6:4e brd ff:ff:ff:ff:ff:ff
+[root@cas-cs6-004 v2.34]# ip link show ens3f1
+13: ens3f1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9238 qdisc mq state UP mode DEFAULT qlen 1000
+    link/ether 24:8a:07:b8:f6:4f brd ff:ff:ff:ff:ff:ff
+[root@cas-cs6-004 v2.34]#
+```
+ 
+Thus our two peer MACs are going to be:
+ 
+port 0 -- ens1f0 24:8a:07:b8:f6:4e
+port 1 -- ens1f1 24:8a:07:b8:f6:4f
+ 
+#14b Run TestPMD with desired config.
+ 
+In this case we set up the port config at run-time. We are allocating 
+ 
+ 
+6 cores to TestPMD, 4 of which will be used for forwarding, along with setting the MAC peer addresses, the number and depth of the queues.
+ 
+umount -a -t hugetlbfs
+mount -t hugetlbfs nodev /mnt/huge
+ 
+
+./testpmd -l 0-7 -n 1 -- --disable-hw-vlan --forward-mode=mac --eth-peer=0,00:00:00:00:33:33 --eth-peer=1,00:00:00:00:44:44 -i --nb-cores=6 --rxq=4 --txq=4 --rxd=12000 --txd=12000
+ 
+./testpmd -l 0-7 -n 1 -- --disable-hw-vlan --forward-mode=mac --eth-peer=0,00:00:00:00:33:33 --eth-peer=1,00:00:00:00:44:44 -i --nb-cores=4 --rxq=4 --txq=4 --rxd=16384 --txd=16384
+ 
+ 
+```
+testpmd -l 1,2,3,4,5,6 -n 1  -- --disable-hw-vlan --forward-mode=mac --eth-peer=0,24:8a:07:b8:f6:4e --eth-peer=1,24:8a:07:b8:f6:4f --nb-cores=4 -i --rxq=4 --txq=4 --rxd=8192 --txd=8192
+```
+ 
+#14c Check forwarding configuration.
+ 
+As we have 4 queues and 4 cores we can see that each queue is scheduled onto its own core.
+ 
+```
+testpmd> show config fwd
+mac packet forwarding - ports=2 - cores=4 - streams=8 - NUMA support enabled, MP over anonymous pages disabled
+Logical Core 2 (socket 0) forwards packets on 2 streams:
+  RX P=0/Q=0 (socket 0) -> TX P=1/Q=0 (socket 0) peer=24:8A:07:B8:F6:4F
+  RX P=0/Q=1 (socket 0) -> TX P=1/Q=1 (socket 0) peer=24:8A:07:B8:F6:4F
+Logical Core 3 (socket 0) forwards packets on 2 streams:
+  RX P=0/Q=2 (socket 0) -> TX P=1/Q=2 (socket 0) peer=24:8A:07:B8:F6:4F
+  RX P=0/Q=3 (socket 0) -> TX P=1/Q=3 (socket 0) peer=24:8A:07:B8:F6:4F
+Logical Core 4 (socket 0) forwards packets on 2 streams:
+  RX P=1/Q=0 (socket 0) -> TX P=0/Q=0 (socket 0) peer=24:8A:07:B8:F6:4E
+  RX P=1/Q=1 (socket 0) -> TX P=0/Q=1 (socket 0) peer=24:8A:07:B8:F6:4E
+Logical Core 5 (socket 0) forwards packets on 2 streams:
+  RX P=1/Q=2 (socket 0) -> TX P=0/Q=2 (socket 0) peer=24:8A:07:B8:F6:4E
+  RX P=1/Q=3 (socket 0) -> TX P=0/Q=3 (socket 0) peer=24:8A:07:B8:F6:4E
+```
+ 
+For instance if we only allocate a single core for forwarding the forwarding configuration will appear as below, where we can see that all 4 queues are scheduled onto a single core.
+ 
+```
+testpmd> show config fwd
+mac packet forwarding - ports=2 - cores=1 - streams=8 - NUMA support enabled, MP over anonymous pages disabled
+Logical Core 2 (socket 0) forwards packets on 8 streams:
+  RX P=0/Q=0 (socket 0) -> TX P=1/Q=0 (socket 0) peer=24:8A:07:B8:F6:4F
+  RX P=0/Q=1 (socket 0) -> TX P=1/Q=1 (socket 0) peer=24:8A:07:B8:F6:4F
+  RX P=0/Q=2 (socket 0) -> TX P=1/Q=2 (socket 0) peer=24:8A:07:B8:F6:4F
+  RX P=0/Q=3 (socket 0) -> TX P=1/Q=3 (socket 0) peer=24:8A:07:B8:F6:4F
+  RX P=1/Q=0 (socket 0) -> TX P=0/Q=0 (socket 0) peer=24:8A:07:B8:F6:4E
+  RX P=1/Q=1 (socket 0) -> TX P=0/Q=1 (socket 0) peer=24:8A:07:B8:F6:4E
+  RX P=1/Q=2 (socket 0) -> TX P=0/Q=2 (socket 0) peer=24:8A:07:B8:F6:4E
+  RX P=1/Q=3 (socket 0) -> TX P=0/Q=3 (socket 0) peer=24:8A:07:B8:F6:4E
+```
+ 
+#14d Start packet forwarding.
+ 
+At this point TestPMD is primed but it will not forward any traffic. Traffic will only be forwarded once we start TestPMD.
+ 
+```
+testpmd> start
+mac packet forwarding - ports=2 - cores=4 - streams=8 - NUMA support enabled, MP over anonymous pages disabled
+Logical Core 2 (socket 0) forwards packets on 2 streams:
+  RX P=0/Q=0 (socket 0) -> TX P=1/Q=0 (socket 0) peer=24:8A:07:B8:F6:4F
+  RX P=0/Q=1 (socket 0) -> TX P=1/Q=1 (socket 0) peer=24:8A:07:B8:F6:4F
+Logical Core 3 (socket 0) forwards packets on 2 streams:
+  RX P=0/Q=2 (socket 0) -> TX P=1/Q=2 (socket 0) peer=24:8A:07:B8:F6:4F
+  RX P=0/Q=3 (socket 0) -> TX P=1/Q=3 (socket 0) peer=24:8A:07:B8:F6:4F
+Logical Core 4 (socket 0) forwards packets on 2 streams:
+  RX P=1/Q=0 (socket 0) -> TX P=0/Q=0 (socket 0) peer=24:8A:07:B8:F6:4E
+  RX P=1/Q=1 (socket 0) -> TX P=0/Q=1 (socket 0) peer=24:8A:07:B8:F6:4E
+Logical Core 5 (socket 0) forwards packets on 2 streams:
+  RX P=1/Q=2 (socket 0) -> TX P=0/Q=2 (socket 0) peer=24:8A:07:B8:F6:4E
+  RX P=1/Q=3 (socket 0) -> TX P=0/Q=3 (socket 0) peer=24:8A:07:B8:F6:4E
+ 
+  mac packet forwarding - CRC stripping enabled - packets/burst=32
+  nb forwarding cores=4 - nb forwarding ports=2
+  RX queues=4 - RX desc=8096 - RX free threshold=0
+  RX threshold registers: pthresh=0 hthresh=0 wthresh=0
+  TX queues=4 - TX desc=8096 - TX free threshold=0
+  TX threshold registers: pthresh=0 hthresh=0 wthresh=0
+  TX RS bit threshold=0 - TXQ flags=0xf0
+```
+ 
+During packet forwarding some forwarding stats can be retrieved however it will not detail any drops. It will show pps though.
+ 
+```
+testpmd> show port stats all
+ 
+  ######################## NIC statistics for port 0  ########################
+  RX-packets: 34337941   RX-missed: 0          RX-bytes:  2060276460
+  RX-errors: 0
+  RX-nombuf:  0
+  TX-packets: 34228322   TX-errors: 0          TX-bytes:  2053699320
+ 
+  Throughput (since last show)
+  Rx-pps:       848020
+  Tx-pps:       848016
+  ############################################################################
+ 
+  ######################## NIC statistics for port 1  ########################
+  RX-packets: 34337914   RX-missed: 0          RX-bytes:  2060274840
+  RX-errors: 0
+  RX-nombuf:  0
+  TX-packets: 34228359   TX-errors: 0          TX-bytes:  2053701540
+ 
+  Throughput (since last show)
+  Rx-pps:       848019
+  Tx-pps:       848016
+  ############################################################################
+```
+ 
+We can see about that each port is rx/tx ~ 0.85MPPS. This corresponds to the traffic generated by t-rex where we launched the following.
+ 
+```
+start -f stl/bench.py -m 0.85mpps -t size=64
+```
+ 
+To stop TestPMD forwarding we simple run "stop". Once we stop the packet forwarding we can then retrieve any drops by TestPMD itseld.
+ 
+```
+testpmd> stop
+Telling cores to stop...
+Waiting for lcores to finish...
+ 
+  ------- Forward Stats for RX Port= 0/Queue= 2 -> TX Port= 1/Queue= 2 -------
+  RX-packets: 115193028      TX-packets: 115083446      TX-dropped: 109582
+  ------- Forward Stats for RX Port= 1/Queue= 1 -> TX Port= 0/Queue= 1 -------
+  RX-packets: 115193751      TX-packets: 115084159      TX-dropped: 109592
+  ---------------------- Forward statistics for port 0  ----------------------
+  RX-packets: 115193028      RX-dropped: 0             RX-total: 115193028
+  TX-packets: 115084159      TX-dropped: 109592        TX-total: 115193751
+  ----------------------------------------------------------------------------
+ 
+  ---------------------- Forward statistics for port 1  ----------------------
+  RX-packets: 115193751      RX-dropped: 0             RX-total: 115193751
+  TX-packets: 115083446      TX-dropped: 109582        TX-total: 115193028
+  ----------------------------------------------------------------------------
+ 
+  +++++++++++++++ Accumulated forward statistics for all ports+++++++++++++++
+  RX-packets: 230386779      RX-dropped: 0             RX-total: 230386779
+  TX-packets: 230167605      TX-dropped: 219174        TX-total: 230386779
+  ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 
+Done.
+```
+ 
+ 
+Additional References
+TestPMD documentation -- https://doc.dpdk.org/guides/linux_gsg/index.html#
+ 
+Testpmd User guide https://doc.dpdk.org/guides/testpmd_app_ug/index.html
